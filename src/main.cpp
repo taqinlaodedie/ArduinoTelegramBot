@@ -2,6 +2,13 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <OneWire.h>
+#include <Wire.h>
+#include <Adafruit_ADS1015.h>
+#include <SPI.h>
+#include <SD.h>
+#include <FS.h>
+#include "file_driver.h"
+#include <time.h>
 
 OneWire  ds(13);
 // Initialize Wifi connection to the router
@@ -9,7 +16,7 @@ char ssid[] = "zaima";              // your network SSID (name)
 char password[] = "12345678";       // your network key
 
 // Initialize Telegram BOT
-#define BOTtoken "917851754:AAG0C8GagT8V7WQK1N8e9rseSNUkIr9ee-E"  //token of TestBOT
+#define BOTtoken "1049433601:AAGnNSDCjH5-sxqjQs0FapGEfOpw9L1CeRo"  //token of TestBOT
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOTtoken, client);
@@ -21,6 +28,29 @@ bool Start = false;
 const int ledPin = 33;
 int ledStatus = 0;
 float tempSol =0, tempPV = 0;
+
+#define I2C_SCL 4
+#define I2C_SDA 5
+Adafruit_ADS1115 ads1115(0x48);  /* Use this for the 16-bit version */
+float Plage = 2.048;
+
+#define SDCS 15
+File csvFile;
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 3600;
+struct tm timeinfo;
+
+void printLocalTime()
+{
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
+
 void handleNewMessages(int numNewMessages) {
   Serial.println("handleNewMessages");
   Serial.println(String(numNewMessages));
@@ -43,16 +73,16 @@ void handleNewMessages(int numNewMessages) {
       digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
       bot.sendMessage(chat_id, "Led is OFF", "");
     }
-    String str_vl="Temp DS18B20 1: " + String(tempSol);
-    if (text == "/temp1") {
+    String str_vl="Temp DS18B20 SOl: " + String(tempSol);
+    if (text == "/tempSol") {
       ledStatus = 0;
-      digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
+      //digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
       bot.sendMessage(chat_id, str_vl, "");
     }
-    str_vl="Temp DS18B20 2: " + String(tempPV);
-    if (text == "/temp2") {
+    str_vl="Temp DS18B20 PV: " + String(tempPV);
+    if (text == "/tempPV") {
       ledStatus = 0;
-      digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
+      //digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
       bot.sendMessage(chat_id, str_vl, "");
     }
     
@@ -172,13 +202,13 @@ void read_temp()
   Serial.print(" Celsius, ");
   Serial.print(fahrenheit);
   Serial.println(" Fahrenheit");
-  if(addr[7]==0xCA) tempSol=celsius;
-  else if(addr[7]!=0xCA) tempPV=celsius;
+  // if(addr[7]==0xCA) tempSol=celsius;
+  // else if(addr[7]!=0xCA) tempPV=celsius;
+  if(addr[7]==0x9C) tempSol=celsius;
+  else if(addr[7]!=0x9C) tempPV=celsius;
 }
 
-void setup() {
-  Serial.begin(115200);
-
+void connect() {
   // Attempt to connect to Wifi network:
   Serial.print("Connecting Wifi: ");
   Serial.println(ssid);
@@ -192,19 +222,83 @@ void setup() {
     Serial.print(".");
     delay(500);
   }
-
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+}
+void setup() {
+  Serial.begin(115200);
+  connect();
+
+  //init and get the time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  printLocalTime();
+  
+  Wire.begin(I2C_SDA, I2C_SCL);
+  ads1115.setGain(GAIN_FOUR);
 
   pinMode(ledPin, OUTPUT); // initialize digital ledPin as an output.
-  delay(10);
   digitalWrite(ledPin, LOW); // initialize pin as off
+
+  if(!SD.begin(SDCS)) {
+    Serial.println("Card Mount Failed");
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  if(cardType == CARD_NONE){
+    Serial.println("No SD card attached");
+    return;
+  }
+
+  Serial.print("SD Card Type: ");
+  if(cardType == CARD_MMC){
+    Serial.println("MMC");
+  } else if(cardType == CARD_SD){
+    Serial.println("SDSC");
+  } else if(cardType == CARD_SDHC){
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+
+  if(!SD.exists("/data.csv")) {
+    writeFile(SD, "/data.csv", "date, tempPV,tempSol,ensoleilment");
+  }
 }
+
+float readLum() {
+  int16_t adc0;
+  float adc0Tension;
+  float adc0Enso;
+  
+  adc0 = ads1115.readADC_SingleEnded(0);
+  //adc0Tension = pow(2,16);
+
+  adc0Tension = (1000.0*adc0*2.0*Plage)/(2.0*pow(2,16));
+  adc0Enso = adc0Tension*10.0;
+  
+  Serial.print("AIN0: "); 
+  Serial.println(adc0);
+  Serial.print("Tension: "); 
+  Serial.print(adc0Tension);
+  Serial.println(" mV");
+  Serial.print("Ensoleillement: "); 
+  Serial.print(adc0Enso);
+  Serial.println(" W/m2");
+  Serial.println( );
+
+  return adc0Enso;
+}
+
 int time_old, time_now;
+char data[50];
+
 void loop() {
- 
   if (millis() > Bot_lasttime + Bot_mtbs)  {
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
@@ -217,11 +311,17 @@ void loop() {
     Bot_lasttime = millis();
   }
    time_now=millis();
-  if(time_now-time_old>5000)
+  if(time_now-time_old > 5000)
   {
     time_old=time_now;
     for(uint8_t i = 0; i < 3; i++) {
       read_temp();
     }
+    getLocalTime(&timeinfo);
+    sprintf(data, "%d:%d:%d %d/%d/%d,%.2f,%.2f,%.2f", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, 
+                                                  timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
+                                                  tempSol, tempPV, readLum());
+    appendFile(SD, "/data.csv", data);
+    readFile(SD, "/data.csv");
   }
 }
