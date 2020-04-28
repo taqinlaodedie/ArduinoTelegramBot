@@ -51,6 +51,14 @@ void printLocalTime()
   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 
+bool isMoreDataAvailable(){
+  return csvFile.available();
+}
+
+byte getNextByte(){
+  return csvFile.read();
+}
+
 void handleNewMessages(int numNewMessages) {
   Serial.println("handleNewMessages");
   Serial.println(String(numNewMessages));
@@ -84,6 +92,13 @@ void handleNewMessages(int numNewMessages) {
       ledStatus = 0;
       //digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
       bot.sendMessage(chat_id, str_vl, "");
+    }
+    if(text == "/csv") {
+      bot.sendMultipartFormDataToTelegram(
+        "sendDocument", "file", "hist.csv", 
+        "document/csv", chat_id, csvFile.size(),
+        isMoreDataAvailable, 
+        getNextByte);
     }
     
     if (text == "/status") {
